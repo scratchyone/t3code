@@ -165,6 +165,15 @@ your login; `t3 connect logout` also clears that login. Background-service
 Treat pairing URLs and authorization codes as passwords. Do not include them in
 screenshots, logs, or bug reports.
 
+## Switch accounts on mobile
+
+Open **Settings → T3 Account** and choose **Add account** to sign in to another
+T3 Connect account, then **Switch account** to move between them. One account is
+active at a time. Switching disconnects the previous account's environments and
+reconnects them, with its unsent drafts, when you switch back. Notifications
+come only from the active account. Signing out of an account forgets its
+environments on this device.
+
 ## T3 Connect troubleshooting
 
 Run `t3 connect status` on the host to inspect saved authorization and link

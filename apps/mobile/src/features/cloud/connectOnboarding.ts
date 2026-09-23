@@ -11,9 +11,10 @@ export const connectOnboardingRequestAtom = Atom.make<string | null>(null).pipe(
 );
 
 /**
- * Requests the onboarding sheet for the given account. Sign-out clears the
- * connected environments, so onboarding runs on every in-session sign-in —
- * each new session starts with no connected devices.
+ * Requests the onboarding sheet for the given account. Runs when an account
+ * signs in with no saved environments on this device: its first sign-in, or
+ * any sign-in after signing out. Switching back to an account restores its
+ * environments instead.
  */
 export function requestConnectOnboarding(accountId: string): void {
   appAtomRegistry.set(connectOnboardingRequestAtom, accountId);

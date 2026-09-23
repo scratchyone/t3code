@@ -130,6 +130,12 @@ codesign --verify --deep --strict "/Applications/T3 Code (Alpha).app"
 codesign -d --entitlements :- "/Applications/T3 Code (Alpha).app"
 ```
 
+## Mobile account switching
+
+The mobile app's account screen uses Clerk's native profile view, which shows **Add account** and
+**Switch account** only when the instance has multi-session enabled (**Configure → Sessions**).
+Without it, users must sign out before signing in to another account.
+
 ## Restricting sign-ups
 
 Use Clerk's allowlist for permitted email addresses or domains, or Restricted mode for invitation-only

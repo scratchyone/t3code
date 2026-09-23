@@ -8,6 +8,7 @@ import { setAgentAwarenessRelayTokenProvider } from "../agent-awareness/remoteRe
 vi.mock("@clerk/expo", () => ({
   ClerkProvider: vi.fn(),
   useAuth: vi.fn(),
+  useSessionList: vi.fn(),
 }));
 
 vi.mock("@clerk/expo/token-cache", () => ({
@@ -26,7 +27,12 @@ vi.mock("../../connection/catalog", () => ({
   },
 }));
 
-vi.mock("./cloud-drafts", () => ({ removeCloudEnvironments: {} }));
+vi.mock("./cloud-drafts", () => ({ removeCloudEnvironments: {}, restoreCloudEnvironments: {} }));
+vi.mock("./cloudAccountEnvironments", () => ({
+  loadSavedCloudEnvironments: vi.fn(async () => null),
+  pruneSavedCloudEnvironments: vi.fn(async () => undefined),
+  saveCloudEnvironments: vi.fn(async () => undefined),
+}));
 vi.mock("../../state/use-composer-drafts", () => ({
   getComposerCloudAccountId: vi.fn(async () => null),
   restoreCloudComposerDrafts: vi.fn(async () => undefined),
