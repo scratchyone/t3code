@@ -131,7 +131,8 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
     accountSync.setSignedInAccounts(
       new Set(
         sessionList.sessions
-          .filter((session) => session.status === "active")
+          // Pending sessions are signed in with a task left, like MFA setup.
+          .filter((session) => session.status === "active" || session.status === "pending")
           .flatMap((session) => (session.user ? [session.user.id] : [])),
       ),
     );

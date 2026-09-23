@@ -5,10 +5,12 @@ import { type CloudTokenProvider, createCloudAccountSync } from "./cloudAccountS
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((innerResolve, innerReject) => {
     resolve = innerResolve;
+    reject = innerReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 /** Lets queued promise continuations run without advancing any gated work. */
@@ -138,12 +140,18 @@ describe("createCloudAccountSync", () => {
 
     // Nothing belonging to either account is reachable while A is cleaned up.
     expect(active()).toBeNull();
-    expect(log).toEqual(["deactivate", "save:account-a:env-a1", "remove:account-a"]);
+    expect(log).toEqual([
+      "clear-onboarding",
+      "deactivate",
+      "save:account-a:env-a1",
+      "remove:account-a",
+    ]);
 
     removal.resolve();
     await sync.settled();
 
     expect(log).toEqual([
+      "clear-onboarding",
       "deactivate",
       "save:account-a:env-a1",
       "remove:account-a",
@@ -171,6 +179,7 @@ describe("createCloudAccountSync", () => {
     await sync.settled();
 
     expect(log).toEqual([
+      "clear-onboarding",
       "deactivate",
       "save:account-b:env-b1",
       "remove:account-b",
@@ -252,7 +261,12 @@ describe("createCloudAccountSync", () => {
     signIn("account-a");
     sync.observe(session("account-a"));
     await sync.settled();
-    expect(log).toEqual(["restore:account-a", "activate:account-a", "onboarding:account-a"]);
+    expect(log).toEqual([
+      "clear-onboarding",
+      "restore:account-a",
+      "activate:account-a",
+      "onboarding:account-a",
+    ]);
   });
 
   it("does not save the environments of an account signed out while another remains", async () => {
@@ -272,6 +286,7 @@ describe("createCloudAccountSync", () => {
     expect(log).toEqual([
       "clear-onboarding",
       "deactivate",
+      "clear-onboarding",
       "remove:account-a",
       "cleanup:account-a-token",
       "restore:account-b",
@@ -310,6 +325,82 @@ describe("createCloudAccountSync", () => {
     await sync.settled();
 
     expect(saved.get("account-a")?.map((env) => env.environmentId)).toEqual(["env-a1"]);
+  });
+
+  it("keeps a complete saved list when a crash left some environments behind", async () => {
+    const { sync, saved, signIn, connect } = harness({ storedAccountId: "account-a" });
+    signIn("account-a", "account-b");
+    saved.set("account-a", [
+      { environmentId: "env-a1", label: "env-a1", enabled: true },
+      { environmentId: "env-a2", label: "env-a2", enabled: true },
+    ]);
+    connect("env-a2");
+
+    sync.observe(session("account-b"));
+    await sync.settled();
+
+    expect(saved.get("account-a")?.map((env) => env.environmentId)).toEqual(["env-a1", "env-a2"]);
+  });
+
+  it("retries the installed account's cleanup rather than a skipped account's", async () => {
+    const { sync, log, saved, active, signIn, connect, holdNextRemoval } = harness();
+    signIn("account-a", "account-b", "account-c");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    connect("env-a1");
+
+    const removal = holdNextRemoval();
+    sync.observe(session("account-b"));
+    await drainMicrotasks();
+    removal.reject(new Error("archive failed"));
+    await sync.settled();
+    expect(active()).toBeNull();
+
+    log.length = 0;
+    sync.observe(session("account-c"));
+    await sync.settled();
+
+    expect(log).toContain("remove:account-a");
+    expect(log).not.toContain("remove:account-b");
+    expect(saved.has("account-b")).toBe(false);
+    expect(saved.get("account-a")?.map((env) => env.environmentId)).toEqual(["env-a1"]);
+    expect(active()?.accountId).toBe("account-c");
+  });
+
+  it("does not onboard an account switched back to with no environments", async () => {
+    const { sync, log, signIn } = harness();
+    signIn("account-a", "account-b");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    sync.observe(session("account-b"));
+    await sync.settled();
+    log.length = 0;
+
+    sync.observe(session("account-a"));
+    await sync.settled();
+
+    expect(log).not.toContain("onboarding:account-a");
+  });
+
+  it("does not onboard when Clerk repeats the session while drafts restore", async () => {
+    const { sync, log, signIn, connect, connected, holdNextDraftRestore } = harness();
+    signIn("account-a", "account-b");
+    sync.observe(session("account-b"));
+    await sync.settled();
+    connect("env-b1");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    log.length = 0;
+
+    const draftRestore = holdNextDraftRestore();
+    sync.observe(session("account-b"));
+    await drainMicrotasks();
+    sync.observe(session("account-b"));
+    draftRestore.resolve();
+    await sync.settled();
+
+    expect(log).not.toContain("onboarding:account-b");
+    expect(connected()).toEqual(["env-b1"]);
   });
 
   it("finishes an environment restore that was interrupted by the app closing", async () => {

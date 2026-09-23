@@ -50,53 +50,61 @@ export interface CloudAccountSync {
 
 /**
  * Moves relay credentials, connected cloud environments and composer drafts
- * from one Clerk account to the next. Only one account is active at a time:
- * every transition archives the previous account's drafts, removes its relay
+ * from one Clerk account to the next. Only one account is installed at a time:
+ * every transition archives the installed account's drafts, removes its relay
  * environments and revokes its credentials before the next account is
- * activated. While an account stays signed in, its removed environments are
+ * installed. While an account stays signed in, its removed environments are
  * saved and reconnected when the user switches back; sign-out forgets them.
  */
 export function createCloudAccountSync(deps: CloudAccountSyncDependencies): CloudAccountSync {
-  let previousTokenProvider: CloudTokenProvider | null = null;
   // undefined until the first observation, so a cold start is not a transition.
   let observedAccount: string | null | undefined = undefined;
+  // The account whose drafts and environments are on this device, with its
+  // token reader once it went live. Undefined until read from the drafts'
+  // owner, which survives a crashed or failed cleanup so it can be retried.
+  let installed:
+    | { readonly accountId: string; readonly tokenProvider: CloudTokenProvider | null }
+    | null
+    | undefined = undefined;
+  // An account switched to with nothing saved onboards once it goes live.
+  let onboardingFor: string | null = null;
   let transition: Promise<void> | null = null;
   let generation = 0;
   let signedInAccounts: ReadonlySet<string> = new Set();
-  // Drafts keep their owner through removal so a crashed cleanup is retried
-  // on the next cold start. Skip the retry for what this process finished.
-  let cleanedAccount: string | null = null;
-  // Clerk can report the same session again before its activation finishes,
-  // which cancels it. The switch stays pending until an activation completes.
-  let pendingSwitchTo: string | null = null;
-
-  const cleanUpAccount = async (
-    previous: CloudTokenProvider | null,
-    accountId: string | null,
-  ): Promise<void> => {
-    cleanedAccount = null;
-    // Save before removing so a crash in between loses nothing. Cleanup can
-    // run again for the same account (a retry, or an account that never
-    // finished activating), so an empty registry keeps the saved list.
-    const environments = await deps.listRelayEnvironments();
-    // Signing out of the active account while another stays signed in
-    // reaches us as a switch, so ask Clerk rather than trusting the transition.
-    const signedIn = signedInAccounts;
-    if (accountId !== null && signedIn.has(accountId) && environments.length > 0) {
-      await deps.saveEnvironments(accountId, environments);
-    }
-    await deps.removeRelayEnvironments(accountId);
-    await deps.pruneSavedEnvironments(signedIn);
-    await deps.cleanUpCredentials(previous);
-    cleanedAccount = accountId;
-  };
 
   const enqueue = (work: () => Promise<void>) => {
     transition = (transition ?? Promise.resolve()).catch(() => {}).then(work);
     return transition;
   };
-  const queueAccountCleanup = (previous: CloudTokenProvider | null, accountId: string | null) =>
-    enqueue(() => cleanUpAccount(previous, accountId));
+
+  const resolveInstalled = async () => {
+    if (installed === undefined) {
+      const stored = await deps.getStoredAccountId();
+      installed = stored === null ? null : { accountId: stored, tokenProvider: null };
+    }
+    return installed;
+  };
+
+  /** Removes the installed account. A failure leaves it installed for the next attempt. */
+  const uninstall = async (): Promise<void> => {
+    const account = await resolveInstalled();
+    if (account === null) return;
+    // Signing out of the active account while another stays signed in
+    // reaches us as a switch, so ask Clerk rather than trusting the transition.
+    const signedIn = signedInAccounts;
+    // Save before removing so a crash in between loses nothing. A list saved
+    // by an interrupted cleanup or restore is complete; the registry may not be.
+    if (
+      signedIn.has(account.accountId) &&
+      (await deps.loadSavedEnvironments(account.accountId)) === null
+    ) {
+      await deps.saveEnvironments(account.accountId, await deps.listRelayEnvironments());
+    }
+    await deps.removeRelayEnvironments(account.accountId);
+    await deps.pruneSavedEnvironments(signedIn);
+    await deps.cleanUpCredentials(account.tokenProvider);
+    installed = null;
+  };
 
   return {
     observe(session) {
@@ -109,81 +117,55 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
       // A cold start observes undefined → account and is not a transition:
       // the registry still holds that account's environments.
       const isAccountTransition =
-        (previousObservedAccount !== undefined && previousObservedAccount !== nextAccount) ||
-        (nextAccount !== null && pendingSwitchTo === nextAccount);
-      pendingSwitchTo = isAccountTransition ? nextAccount : null;
-      if (isAccountTransition && nextAccount === null) {
+        previousObservedAccount !== undefined && previousObservedAccount !== nextAccount;
+      if (isAccountTransition) {
+        // A request made for the previous account must not open over the next.
         deps.clearOnboardingRequest();
       }
-
-      const previous = previousTokenProvider;
-      if (session === null) {
-        previousTokenProvider = null;
+      if (
+        session === null ||
+        (previousObservedAccount != null && previousObservedAccount !== nextAccount)
+      ) {
+        // Revoke the previous account before the next one can read relay state.
         deps.deactivate();
-        if (previousObservedAccount !== null) {
-          deps.track(
-            "cloud account cleanup",
-            queueAccountCleanup(previous, previousObservedAccount ?? null),
-          );
-        }
+      }
+      if (session === null) {
+        deps.track("cloud account cleanup", enqueue(uninstall));
         return;
       }
 
       const { accountId, tokenProvider } = session;
-      const activateAfter = (pending: Promise<void>) => {
-        const activation = (async () => {
-          await pending;
+      const activation = enqueue(async () => {
+        if (!isCurrent()) return;
+        const account = await resolveInstalled();
+        if (account !== null && account.accountId !== accountId) {
+          await uninstall();
           if (!isCurrent()) return;
-          // Drafts on disk may belong to an account that was switched away
-          // from while the app was closed. Archive them before restoring.
-          const storedAccount = await deps.getStoredAccountId();
-          if (
-            storedAccount !== null &&
-            storedAccount !== accountId &&
-            storedAccount !== cleanedAccount
-          ) {
-            await cleanUpAccount(null, storedAccount);
-          }
-          if (!isCurrent()) return;
-          // Once drafts come back the account is installed, even if a newer
-          // switch arrives: the next cleanup must find all of it to archive.
-          await deps.restoreDrafts(accountId);
-          // A saved list is deleted once restored, so one left over for the
-          // active account means a restore was interrupted.
-          const saved = await deps.loadSavedEnvironments(accountId);
-          if (saved !== null) {
-            await deps.restoreEnvironments(saved);
-            await deps.forgetSavedEnvironments(accountId);
-          }
-          if (!isCurrent()) return;
-          previousTokenProvider = tokenProvider;
-          deps.activate(accountId, tokenProvider);
-          pendingSwitchTo = null;
-          if (saved === null && isAccountTransition) {
-            // Only an account with nothing saved on this device gets the T3
-            // Connect onboarding sheet.
-            deps.requestOnboarding(accountId);
-          }
-        })();
-        transition = activation;
-        deps.track("cloud account activation", activation);
-      };
-
-      if (
-        previousObservedAccount !== undefined &&
-        previousObservedAccount !== null &&
-        previousObservedAccount !== accountId
-      ) {
-        // Direct switch between signed-in accounts: revoke the previous
-        // account before the next one can read any relay state.
-        previousTokenProvider = null;
-        deps.deactivate();
-        activateAfter(queueAccountCleanup(previous, previousObservedAccount));
-      } else {
-        // A failed disk write can be retried. The stored account check above
-        // still requires cleanup before activating a different account.
-        activateAfter((transition ?? Promise.resolve()).catch(() => {}));
-      }
+        }
+        const newlyInstalled = installed === null;
+        if (newlyInstalled) installed = { accountId, tokenProvider: null };
+        // Once drafts come back the account is installed, even if a newer
+        // switch arrives: the next cleanup must find all of it to archive.
+        await deps.restoreDrafts(accountId);
+        // A saved list is deleted once restored, so one left over for the
+        // installed account means a restore was interrupted.
+        const saved = await deps.loadSavedEnvironments(accountId);
+        if (saved !== null) {
+          await deps.restoreEnvironments(saved);
+          await deps.forgetSavedEnvironments(accountId);
+        }
+        if (newlyInstalled) {
+          onboardingFor = saved === null && isAccountTransition ? accountId : null;
+        }
+        if (!isCurrent()) return;
+        installed = { accountId, tokenProvider };
+        deps.activate(accountId, tokenProvider);
+        if (onboardingFor === accountId) {
+          onboardingFor = null;
+          deps.requestOnboarding(accountId);
+        }
+      });
+      deps.track("cloud account activation", activation);
     },
     setSignedInAccounts(accountIds) {
       signedInAccounts = accountIds;
