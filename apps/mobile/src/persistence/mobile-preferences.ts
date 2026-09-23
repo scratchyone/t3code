@@ -16,6 +16,13 @@ import { MobileStorageDecodeError, MobileStorageEncodeError } from "./mobile-sto
 const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 
+/** A relay environment an account had connected when it was switched away from. */
+export interface SavedCloudEnvironment {
+  readonly environmentId: string;
+  readonly label: string;
+  readonly enabled: boolean;
+}
+
 export interface Preferences {
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
@@ -28,6 +35,14 @@ export interface Preferences {
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
+  /**
+   * Relay environments of signed-in accounts that are not the active one,
+   * keyed by Clerk user id. Switching back reconnects them; sign-out forgets
+   * them. An account with a record has been set up on this device before.
+   */
+  readonly cloudAccountEnvironments?: Readonly<
+    Record<string, ReadonlyArray<SavedCloudEnvironment>>
+  >;
   readonly collapsedProjectGroups?: readonly string[];
   /** What the Return key does in the composer on a hardware keyboard. iOS only. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
@@ -109,6 +124,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
+    cloudAccountEnvironments?: Preferences["cloudAccountEnvironments"];
     collapsedProjectGroups?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
@@ -164,6 +180,22 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.connectOnboardingOptOutAccounts = parsed.connectOnboardingOptOutAccounts.filter(
       (account): account is string => typeof account === "string",
     );
+  }
+  if (
+    typeof parsed.cloudAccountEnvironments === "object" &&
+    parsed.cloudAccountEnvironments !== null
+  ) {
+    const accounts: Record<string, ReadonlyArray<SavedCloudEnvironment>> = {};
+    for (const [accountId, environments] of Object.entries(parsed.cloudAccountEnvironments)) {
+      if (!Array.isArray(environments)) continue;
+      accounts[accountId] = environments.filter(
+        (environment): environment is SavedCloudEnvironment =>
+          typeof environment?.environmentId === "string" &&
+          typeof environment.label === "string" &&
+          typeof environment.enabled === "boolean",
+      );
+    }
+    preferences.cloudAccountEnvironments = accounts;
   }
   if (Array.isArray(parsed.collapsedProjectGroups)) {
     preferences.collapsedProjectGroups = parsed.collapsedProjectGroups.filter(

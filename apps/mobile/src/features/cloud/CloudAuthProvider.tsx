@@ -1,4 +1,4 @@
-import { ClerkProvider, useAuth } from "@clerk/expo";
+import { ClerkProvider, useAuth, useSessionList } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
 import { ManagedRelay, setManagedRelaySession } from "@t3tools/client-runtime/relay";
 import {
@@ -24,7 +24,12 @@ import {
 } from "../agent-awareness/remoteRegistration";
 import { clearConnectOnboardingRequest, requestConnectOnboarding } from "./connectOnboarding";
 import { resolveCloudPublicConfig, resolveRelayClerkTokenOptions } from "./publicConfig";
-import { removeCloudEnvironments } from "./cloud-drafts";
+import { removeCloudEnvironments, restoreCloudEnvironments } from "./cloud-drafts";
+import {
+  loadSavedCloudEnvironments,
+  pruneSavedCloudEnvironments,
+  saveCloudEnvironments,
+} from "./cloudAccountEnvironments";
 import { createCloudAccountSync } from "./cloudAccountSync";
 
 function resetManagedRelayTokenCache() {
@@ -53,6 +58,7 @@ export function activateCloudRelayAccount(
 
 function CloudAuthBridge(props: { readonly children: ReactNode }) {
   const { getToken, isLoaded, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
+  const sessionList = useSessionList();
   const [accountSync] = useState(() =>
     createCloudAccountSync({
       removeRelayEnvironments: async (accountId) => {
@@ -61,6 +67,7 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
           reportDefect: false,
         });
         if (removal._tag !== "Success") throw squashAtomCommandFailure(removal);
+        return removal.value;
       },
       cleanUpCredentials: async (previousTokenProvider) => {
         const results = await Promise.all([
@@ -79,6 +86,18 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
           reportAtomCommandResult(result, { label: "cloud account cleanup" });
         }
       },
+      loadSavedEnvironments: loadSavedCloudEnvironments,
+      saveEnvironments: saveCloudEnvironments,
+      pruneSavedEnvironments: pruneSavedCloudEnvironments,
+      restoreEnvironments: async (environments) => {
+        const restore = await runAtomCommand(
+          appAtomRegistry,
+          restoreCloudEnvironments,
+          environments,
+          { reportFailure: false, reportDefect: false },
+        );
+        if (restore._tag !== "Success") throw squashAtomCommandFailure(restore);
+      },
       getStoredAccountId: getComposerCloudAccountId,
       restoreDrafts: restoreCloudComposerDrafts,
       activate: activateCloudRelayAccount,
@@ -94,7 +113,20 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (!isLoaded) {
+    if (!sessionList.isLoaded) return;
+    accountSync.setSignedInAccounts(
+      new Set(
+        sessionList.sessions
+          .filter((session) => session.status === "active")
+          .flatMap((session) => (session.user ? [session.user.id] : [])),
+      ),
+    );
+  }, [accountSync, sessionList.isLoaded, sessionList.sessions]);
+
+  useEffect(() => {
+    // Saved environments are kept or forgotten by the signed-in session list,
+    // so wait for it before the first transition.
+    if (!isLoaded || !sessionList.isLoaded) {
       return;
     }
     accountSync.observe(
@@ -103,7 +135,7 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
         : null,
     );
     return accountSync.cancel;
-  }, [accountSync, getToken, isLoaded, isSignedIn, userId]);
+  }, [accountSync, getToken, isLoaded, isSignedIn, sessionList.isLoaded, userId]);
 
   useEffect(
     () => () => {
