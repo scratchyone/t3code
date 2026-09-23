@@ -403,6 +403,47 @@ describe("createCloudAccountSync", () => {
     expect(connected()).toEqual(["env-b1"]);
   });
 
+  it("onboards a new account when Clerk repeats its session before it installs", async () => {
+    const { sync, log, signIn, holdNextRemoval } = harness();
+    signIn("account-a", "account-b");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    log.length = 0;
+
+    const removal = holdNextRemoval();
+    sync.observe(session("account-b"));
+    sync.observe(session("account-b"));
+    removal.resolve();
+    await sync.settled();
+
+    expect(log).toContain("onboarding:account-b");
+  });
+
+  it("forgets environments of an account that signs back in before its cleanup runs", async () => {
+    const { sync, log, saved, signIn, connect, holdNextDraftRestore } = harness();
+    signIn("account-a", "account-b");
+    sync.observe(session("account-b"));
+    await sync.settled();
+    sync.observe(session("account-a"));
+    await sync.settled();
+    connect("env-a1");
+    log.length = 0;
+
+    // Queue A's sign-out cleanup behind other work, then sign A straight back in.
+    const busy = holdNextDraftRestore();
+    sync.observe(session("account-a"));
+    signIn("account-b");
+    sync.observe(null);
+    signIn("account-a", "account-b");
+    sync.observe(session("account-a"));
+    busy.resolve();
+    await sync.settled();
+
+    expect(saved.has("account-a")).toBe(false);
+    expect(log).not.toContain("reconnect:env-a1");
+    expect(log).toContain("onboarding:account-a");
+  });
+
   it("finishes an environment restore that was interrupted by the app closing", async () => {
     // B's drafts were restored, then the app died before its environments came back.
     const { sync, log, saved, signIn, connected } = harness({ storedAccountId: "account-b" });

@@ -66,8 +66,10 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
     | { readonly accountId: string; readonly tokenProvider: CloudTokenProvider | null }
     | null
     | undefined = undefined;
-  // An account switched to with nothing saved onboards once it goes live.
+  // An account installed with nothing saved onboards once it goes live,
+  // unless no account change has happened yet: a cold start never onboards.
   let onboardingFor: string | null = null;
+  let hasChangedAccount = false;
   let transition: Promise<void> | null = null;
   let generation = 0;
   let signedInAccounts: ReadonlySet<string> = new Set();
@@ -86,12 +88,9 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
   };
 
   /** Removes the installed account. A failure leaves it installed for the next attempt. */
-  const uninstall = async (): Promise<void> => {
+  const uninstall = async (signedIn: ReadonlySet<string>): Promise<void> => {
     const account = await resolveInstalled();
     if (account === null) return;
-    // Signing out of the active account while another stays signed in
-    // reaches us as a switch, so ask Clerk rather than trusting the transition.
-    const signedIn = signedInAccounts;
     // Save before removing so a crash in between loses nothing. A list saved
     // by an interrupted cleanup or restore is complete; the registry may not be.
     if (
@@ -113,12 +112,17 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
       const previousObservedAccount = observedAccount;
       const nextAccount = session?.accountId ?? null;
       observedAccount = nextAccount;
+      // Signing out of the active account while another stays signed in
+      // reaches us as a switch, so ask Clerk rather than trusting the
+      // transition. Read it now: a quick sign-in again must not undo a sign-out.
+      const signedIn = signedInAccounts;
 
       // A cold start observes undefined → account and is not a transition:
       // the registry still holds that account's environments.
       const isAccountTransition =
         previousObservedAccount !== undefined && previousObservedAccount !== nextAccount;
       if (isAccountTransition) {
+        hasChangedAccount = true;
         // A request made for the previous account must not open over the next.
         deps.clearOnboardingRequest();
       }
@@ -130,7 +134,10 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
         deps.deactivate();
       }
       if (session === null) {
-        deps.track("cloud account cleanup", enqueue(uninstall));
+        deps.track(
+          "cloud account cleanup",
+          enqueue(() => uninstall(signedIn)),
+        );
         return;
       }
 
@@ -139,7 +146,7 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
         if (!isCurrent()) return;
         const account = await resolveInstalled();
         if (account !== null && account.accountId !== accountId) {
-          await uninstall();
+          await uninstall(signedIn);
           if (!isCurrent()) return;
         }
         const newlyInstalled = installed === null;
@@ -155,7 +162,7 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
           await deps.forgetSavedEnvironments(accountId);
         }
         if (newlyInstalled) {
-          onboardingFor = saved === null && isAccountTransition ? accountId : null;
+          onboardingFor = saved === null && hasChangedAccount ? accountId : null;
         }
         if (!isCurrent()) return;
         installed = { accountId, tokenProvider };
