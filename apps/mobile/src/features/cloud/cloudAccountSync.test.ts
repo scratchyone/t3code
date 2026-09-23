@@ -27,20 +27,20 @@ function harness(options: { readonly storedAccountId?: string | null } = {}) {
   let storedAccountId = options.storedAccountId ?? null;
   let active: { readonly accountId: string; readonly token: Promise<string | null> } | null = null;
   const removalGates: Array<ReturnType<typeof deferred>> = [];
+  const draftGates: Array<ReturnType<typeof deferred>> = [];
   // Relay environments currently in the registry, and each account's saved set.
   let connected: SavedCloudEnvironment[] = [];
   const saved = new Map<string, ReadonlyArray<SavedCloudEnvironment>>();
 
   const sync = createCloudAccountSync({
+    listRelayEnvironments: async () => [...connected],
     removeRelayEnvironments: async (accountId) => {
       log.push(`remove:${accountId}`);
       const gate = removalGates.shift();
       if (gate) await gate.promise;
       // Like the real draft archive, the stored owner survives removal so a
       // crashed cleanup can be retried on the next cold start.
-      const removed = connected;
       connected = [];
-      return removed;
     },
     cleanUpCredentials: async (previous) => {
       log.push(`cleanup:${previous ? await previous() : "none"}`);
@@ -49,6 +49,9 @@ function harness(options: { readonly storedAccountId?: string | null } = {}) {
     saveEnvironments: async (accountId, environments) => {
       log.push(`save:${accountId}:${environments.map((env) => env.environmentId).join(",")}`);
       saved.set(accountId, environments);
+    },
+    forgetSavedEnvironments: async (accountId) => {
+      saved.delete(accountId);
     },
     pruneSavedEnvironments: async (keep) => {
       for (const accountId of saved.keys()) {
@@ -63,6 +66,7 @@ function harness(options: { readonly storedAccountId?: string | null } = {}) {
     restoreDrafts: async (accountId) => {
       log.push(`restore:${accountId}`);
       storedAccountId = accountId;
+      await draftGates.shift()?.promise;
     },
     activate: (accountId, tokenProvider) => {
       log.push(`activate:${accountId}`);
@@ -99,6 +103,11 @@ function harness(options: { readonly storedAccountId?: string | null } = {}) {
       removalGates.push(gate);
       return gate;
     },
+    holdNextDraftRestore: () => {
+      const gate = deferred();
+      draftGates.push(gate);
+      return gate;
+    },
   };
 }
 
@@ -129,15 +138,15 @@ describe("createCloudAccountSync", () => {
 
     // Nothing belonging to either account is reachable while A is cleaned up.
     expect(active()).toBeNull();
-    expect(log).toEqual(["deactivate", "remove:account-a"]);
+    expect(log).toEqual(["deactivate", "save:account-a:env-a1", "remove:account-a"]);
 
     removal.resolve();
     await sync.settled();
 
     expect(log).toEqual([
       "deactivate",
-      "remove:account-a",
       "save:account-a:env-a1",
+      "remove:account-a",
       "cleanup:account-a-token",
       "restore:account-b",
       "activate:account-b",
@@ -163,12 +172,12 @@ describe("createCloudAccountSync", () => {
 
     expect(log).toEqual([
       "deactivate",
-      "remove:account-b",
       "save:account-b:env-b1",
+      "remove:account-b",
       "cleanup:account-b-token",
       "restore:account-a",
-      "activate:account-a",
       "reconnect:env-a1,env-a2",
+      "activate:account-a",
     ]);
     expect(connected()).toEqual(["env-a1", "env-a2"]);
 
@@ -274,32 +283,129 @@ describe("createCloudAccountSync", () => {
   });
 
   it("saves and restores across a switch made while the app was closed", async () => {
-    const { sync, log, signIn } = harness({ storedAccountId: "account-a" });
+    const { sync, log, signIn, connect } = harness({ storedAccountId: "account-a" });
     signIn("account-a", "account-b");
+    connect("env-a1");
 
     sync.observe(session("account-b"));
     await sync.settled();
 
     expect(log).toEqual([
+      "save:account-a:env-a1",
       "remove:account-a",
-      "save:account-a:",
       "cleanup:none",
       "restore:account-b",
       "activate:account-b",
     ]);
   });
 
+  it("keeps the saved list when a crashed cleanup is retried on the next start", async () => {
+    // The previous run saved A's list and removed its environments, then died
+    // before B's drafts took ownership.
+    const { sync, saved, signIn } = harness({ storedAccountId: "account-a" });
+    signIn("account-a", "account-b");
+    saved.set("account-a", [{ environmentId: "env-a1", label: "env-a1", enabled: true }]);
+
+    sync.observe(session("account-b"));
+    await sync.settled();
+
+    expect(saved.get("account-a")?.map((env) => env.environmentId)).toEqual(["env-a1"]);
+  });
+
+  it("finishes an environment restore that was interrupted by the app closing", async () => {
+    // B's drafts were restored, then the app died before its environments came back.
+    const { sync, log, saved, signIn, connected } = harness({ storedAccountId: "account-b" });
+    signIn("account-a", "account-b");
+    saved.set("account-b", [{ environmentId: "env-b1", label: "env-b1", enabled: true }]);
+
+    sync.observe(session("account-b"));
+    await sync.settled();
+
+    expect(log).toEqual(["restore:account-b", "reconnect:env-b1", "activate:account-b"]);
+    expect(connected()).toEqual(["env-b1"]);
+    expect(saved.has("account-b")).toBe(false);
+  });
+
+  it("keeps a skipped account's saved environments when switches outpace cleanup", async () => {
+    const { sync, saved, signIn, connect, holdNextRemoval } = harness();
+    signIn("account-a", "account-b", "account-c");
+    sync.observe(session("account-b"));
+    await sync.settled();
+    connect("env-b1");
+    sync.observe(session("account-a"));
+    await sync.settled();
+
+    const removal = holdNextRemoval();
+    sync.observe(session("account-b"));
+    sync.observe(session("account-c"));
+    removal.resolve();
+    await sync.settled();
+
+    expect(saved.get("account-b")?.map((env) => env.environmentId)).toEqual(["env-b1"]);
+  });
+
+  it("archives an account superseded while its drafts were restoring", async () => {
+    const { sync, log, saved, active, signIn, connect, connected, holdNextDraftRestore } =
+      harness();
+    signIn("account-a", "account-b", "account-c");
+    sync.observe(session("account-b"));
+    await sync.settled();
+    connect("env-b1");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    log.length = 0;
+
+    const draftRestore = holdNextDraftRestore();
+    sync.observe(session("account-b"));
+    await drainMicrotasks();
+    expect(log).toContain("restore:account-b");
+    sync.observe(session("account-c"));
+    draftRestore.resolve();
+    await sync.settled();
+
+    // B finished installing without going live, then was cleaned up normally.
+    expect(log).not.toContain("activate:account-b");
+    expect(log).toContain("reconnect:env-b1");
+    expect(log).toContain("remove:account-b");
+    expect(saved.get("account-b")?.map((env) => env.environmentId)).toEqual(["env-b1"]);
+    expect(connected()).toEqual([]);
+    expect(active()?.accountId).toBe("account-c");
+  });
+
+  it("forgets an inactive account's saved environments when it signs out", async () => {
+    const { sync, log, saved, signIn, connect } = harness();
+    signIn("account-a", "account-b");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    connect("env-a1");
+    sync.observe(session("account-b"));
+    await sync.settled();
+    expect(saved.has("account-a")).toBe(true);
+
+    signIn("account-b");
+    await sync.settled();
+    expect(saved.has("account-a")).toBe(false);
+
+    // Signing back in is a fresh account on this device.
+    log.length = 0;
+    signIn("account-a", "account-b");
+    sync.observe(session("account-a"));
+    await sync.settled();
+    expect(log).toContain("onboarding:account-a");
+  });
+
   it("keeps the next account inactive when the previous account's cleanup fails", async () => {
     const failures: unknown[] = [];
     const log: string[] = [];
     const sync = createCloudAccountSync({
+      listRelayEnvironments: async () => [],
       removeRelayEnvironments: async (accountId) => {
         if (accountId === "account-a") throw new Error("archive failed");
-        return [];
       },
       cleanUpCredentials: async () => {},
       loadSavedEnvironments: async () => null,
       saveEnvironments: async () => {},
+      forgetSavedEnvironments: async () => {},
       pruneSavedEnvironments: async () => {},
       restoreEnvironments: async () => {},
       getStoredAccountId: async () => null,

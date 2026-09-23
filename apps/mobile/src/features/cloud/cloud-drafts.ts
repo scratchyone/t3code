@@ -26,20 +26,32 @@ export class CloudDraftArchiveError extends Schema.TaggedError<CloudDraftArchive
   }
 }
 
-export const removeCloudEnvironments = createRuntimeCommand(connectionAtomRuntime, {
-  label: "cloud:preserve-drafts-and-remove-environments",
-  execute: Effect.fn("removeCloudEnvironments")(function* (accountId: string | null) {
-    const registry = yield* EnvironmentRegistry;
-    const entries = yield* SubscriptionRef.get(registry.entries);
-    const relayEntries = [...entries.values()].filter(
-      (entry) => entry.target._tag === "RelayConnectionTarget",
-    );
-    const environments: ReadonlyArray<SavedCloudEnvironment> = relayEntries.map((entry) => ({
+const relayEntries = Effect.gen(function* () {
+  const registry = yield* EnvironmentRegistry;
+  const entries = yield* SubscriptionRef.get(registry.entries);
+  return [...entries.values()].filter((entry) => entry.target._tag === "RelayConnectionTarget");
+});
+
+/** The relay environments currently registered, in the shape saved per account. */
+export const listCloudEnvironments = createRuntimeCommand(connectionAtomRuntime, {
+  label: "cloud:list-environments",
+  execute: Effect.fn("listCloudEnvironments")(function* () {
+    const entries = yield* relayEntries;
+    return entries.map((entry): SavedCloudEnvironment => ({
       environmentId: entry.target.environmentId,
       label: entry.target.label,
       enabled: entry.enabled,
     }));
-    const environmentIds = new Set(relayEntries.map((entry) => entry.target.environmentId));
+  }),
+});
+
+export const removeCloudEnvironments = createRuntimeCommand(connectionAtomRuntime, {
+  label: "cloud:preserve-drafts-and-remove-environments",
+  execute: Effect.fn("removeCloudEnvironments")(function* (accountId: string | null) {
+    const registry = yield* EnvironmentRegistry;
+    const environmentIds = new Set(
+      (yield* relayEntries).map((entry) => entry.target.environmentId),
+    );
     // Credentials are already revoked. A failed backup must leave the local
     // owners intact so a later sign-in can retry without losing their files.
     yield* Effect.tryPromise({
@@ -52,7 +64,6 @@ export const removeCloudEnvironments = createRuntimeCommand(connectionAtomRuntim
         }),
     });
     yield* registry.removeRelayEnvironments();
-    return environments;
   }),
 });
 

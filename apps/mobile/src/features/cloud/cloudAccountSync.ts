@@ -3,13 +3,12 @@ import type { SavedCloudEnvironment } from "../../persistence/mobile-preferences
 export type CloudTokenProvider = () => Promise<string | null>;
 
 export interface CloudAccountSyncDependencies {
-  /** Archives the account's drafts, drops every relay environment and returns what it dropped. */
-  readonly removeRelayEnvironments: (
-    accountId: string | null,
-  ) => Promise<ReadonlyArray<SavedCloudEnvironment>>;
+  readonly listRelayEnvironments: () => Promise<ReadonlyArray<SavedCloudEnvironment>>;
+  /** Archives the account's drafts and drops every relay environment. */
+  readonly removeRelayEnvironments: (accountId: string | null) => Promise<void>;
   /** Clears relay tokens and the push registration of the previous account. */
   readonly cleanUpCredentials: (previousTokenProvider: CloudTokenProvider | null) => Promise<void>;
-  /** Null when the account was never switched away from on this device. */
+  /** Null unless the account was switched away from and not yet restored. */
   readonly loadSavedEnvironments: (
     accountId: string,
   ) => Promise<ReadonlyArray<SavedCloudEnvironment> | null>;
@@ -17,6 +16,7 @@ export interface CloudAccountSyncDependencies {
     accountId: string,
     environments: ReadonlyArray<SavedCloudEnvironment>,
   ) => Promise<void>;
+  readonly forgetSavedEnvironments: (accountId: string) => Promise<void>;
   /** Forgets saved environments of every account not in the set. */
   readonly pruneSavedEnvironments: (signedInAccountIds: ReadonlySet<string>) => Promise<void>;
   readonly restoreEnvironments: (
@@ -64,8 +64,7 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
   let generation = 0;
   let signedInAccounts: ReadonlySet<string> = new Set();
   // Drafts keep their owner through removal so a crashed cleanup is retried
-  // on the next cold start. Remember what this process already finished, or
-  // the retry would run again and save the account's environments as empty.
+  // on the next cold start. Skip the retry for what this process finished.
   let cleanedAccount: string | null = null;
   // Clerk can report the same session again before its activation finishes,
   // which cancels it. The switch stays pending until an activation completes.
@@ -76,24 +75,28 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
     accountId: string | null,
   ): Promise<void> => {
     cleanedAccount = null;
-    const removed = await deps.removeRelayEnvironments(accountId);
+    // Save before removing so a crash in between loses nothing. Cleanup can
+    // run again for the same account (a retry, or an account that never
+    // finished activating), so an empty registry keeps the saved list.
+    const environments = await deps.listRelayEnvironments();
     // Signing out of the active account while another stays signed in
     // reaches us as a switch, so ask Clerk rather than trusting the transition.
     const signedIn = signedInAccounts;
-    if (accountId !== null && signedIn.has(accountId)) {
-      await deps.saveEnvironments(accountId, removed);
+    if (accountId !== null && signedIn.has(accountId) && environments.length > 0) {
+      await deps.saveEnvironments(accountId, environments);
     }
+    await deps.removeRelayEnvironments(accountId);
     await deps.pruneSavedEnvironments(signedIn);
     await deps.cleanUpCredentials(previous);
     cleanedAccount = accountId;
   };
 
-  const queueAccountCleanup = (previous: CloudTokenProvider | null, accountId: string | null) => {
-    transition = (transition ?? Promise.resolve())
-      .catch(() => {})
-      .then(() => cleanUpAccount(previous, accountId));
+  const enqueue = (work: () => Promise<void>) => {
+    transition = (transition ?? Promise.resolve()).catch(() => {}).then(work);
     return transition;
   };
+  const queueAccountCleanup = (previous: CloudTokenProvider | null, accountId: string | null) =>
+    enqueue(() => cleanUpAccount(previous, accountId));
 
   return {
     observe(session) {
@@ -134,29 +137,31 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
           // Drafts on disk may belong to an account that was switched away
           // from while the app was closed. Archive them before restoring.
           const storedAccount = await deps.getStoredAccountId();
-          const switchedWhileClosed =
+          if (
             storedAccount !== null &&
             storedAccount !== accountId &&
-            storedAccount !== cleanedAccount;
-          if (switchedWhileClosed) {
+            storedAccount !== cleanedAccount
+          ) {
             await cleanUpAccount(null, storedAccount);
           }
           if (!isCurrent()) return;
+          // Once drafts come back the account is installed, even if a newer
+          // switch arrives: the next cleanup must find all of it to archive.
           await deps.restoreDrafts(accountId);
-          if (!isCurrent()) return;
-          const saved =
-            isAccountTransition || switchedWhileClosed
-              ? await deps.loadSavedEnvironments(accountId)
-              : null;
+          // A saved list is deleted once restored, so one left over for the
+          // active account means a restore was interrupted.
+          const saved = await deps.loadSavedEnvironments(accountId);
+          if (saved !== null) {
+            await deps.restoreEnvironments(saved);
+            await deps.forgetSavedEnvironments(accountId);
+          }
           if (!isCurrent()) return;
           previousTokenProvider = tokenProvider;
           deps.activate(accountId, tokenProvider);
           pendingSwitchTo = null;
-          if (saved !== null) {
-            await deps.restoreEnvironments(saved);
-          } else if (isAccountTransition) {
-            // Only an account this device has never switched away from gets
-            // the T3 Connect onboarding sheet.
+          if (saved === null && isAccountTransition) {
+            // Only an account with nothing saved on this device gets the T3
+            // Connect onboarding sheet.
             deps.requestOnboarding(accountId);
           }
         })();
@@ -182,6 +187,11 @@ export function createCloudAccountSync(deps: CloudAccountSyncDependencies): Clou
     },
     setSignedInAccounts(accountIds) {
       signedInAccounts = accountIds;
+      // Signing out of an inactive account forgets it without a transition.
+      deps.track(
+        "cloud account prune",
+        enqueue(() => deps.pruneSavedEnvironments(accountIds)),
+      );
     },
     cancel() {
       generation++;

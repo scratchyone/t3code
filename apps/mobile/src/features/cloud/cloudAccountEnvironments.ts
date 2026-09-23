@@ -18,6 +18,14 @@ export async function saveCloudEnvironments(
   }));
 }
 
+export async function forgetSavedCloudEnvironments(accountId: string): Promise<void> {
+  await updatePreferences((current) => {
+    if (!current.cloudAccountEnvironments?.[accountId]) return {};
+    const { [accountId]: _restored, ...kept } = current.cloudAccountEnvironments;
+    return { cloudAccountEnvironments: kept };
+  });
+}
+
 export async function pruneSavedCloudEnvironments(
   signedInAccountIds: ReadonlySet<string>,
 ): Promise<void> {
