@@ -72,6 +72,20 @@ can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.
 
+## Mods
+
+Enabled Claude Code mods can add controls above the composer, open panes, and
+customize conversation rows. Use Claude Code 2.1.288 or newer on the connected
+environment, and start a turn to load its mods.
+
+Install and enable mods in that Claude instance's configuration. For a local mod,
+add `--plugin-dir /absolute/path/to/mod` to the instance's **Launch arguments** in
+**Settings > Providers**. Restart the session after changing its mod configuration.
+
+Web and desktop use Claude's desktop surface. Mobile uses its mobile surface;
+mods must provide a mobile drawing to appear there. Terminal-only hooks remain
+in Claude Code's terminal.
+
 ## OpenRouter
 
 Create a Claude instance with its own config directory, such as

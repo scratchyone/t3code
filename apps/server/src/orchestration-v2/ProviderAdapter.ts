@@ -1,3 +1,4 @@
+import type { ProviderModUiRequest, ProviderModUiEvent } from "@t3tools/contracts";
 import type { OrchestrationV2HistoricalMessage } from "@t3tools/contracts";
 import {
   ChatAttachment,
@@ -482,6 +483,15 @@ export interface ProviderAdapterV2HistoricalContext {
 }
 
 export interface ProviderAdapterV2SessionRuntime {
+  readonly modUi?: {
+    readonly request: (
+      providerThread: OrchestrationV2ProviderThread,
+      input: ProviderModUiRequest,
+    ) => Effect.Effect<unknown, ProviderAdapterV2Error>;
+    readonly events: (
+      providerThread: OrchestrationV2ProviderThread,
+    ) => Stream.Stream<ProviderModUiEvent>;
+  };
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;

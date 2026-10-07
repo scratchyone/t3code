@@ -1,3 +1,5 @@
+import { modUiToolProps, modUiResultText } from "@t3tools/client-runtime/mod-ui";
+import { ModUiSite } from "../mods/ModUiSite";
 import { ComputerUseAppIcon } from "~/components/Icons";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock, WorkLogButton, WorkLogDetails, WorkLogList, WorkLogRow } from "./WorkLog";
@@ -2227,12 +2229,24 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </div>
         ) : null}
         <div onCopyCapture={onBodyCopyCapture}>
-          <CollapsibleUserMessageBody
-            text={resolvedContext.text}
-            renderContextReference={renderContextReference}
-            skills={ctx.skills}
-            markdownCwd={ctx.markdownCwd}
-          />
+          <ModUiSite
+            component="UserMessage"
+            instanceId={row.message.id}
+            props={{
+              text: resolvedContext.text,
+              origin: { kind: "unclassified" },
+              isExpanded: true,
+            }}
+          >
+            {(modProps) => (
+              <CollapsibleUserMessageBody
+                text={typeof modProps.text === "string" ? modProps.text : resolvedContext.text}
+                renderContextReference={renderContextReference}
+                skills={ctx.skills}
+                markdownCwd={ctx.markdownCwd}
+              />
+            )}
+          </ModUiSite>
         </div>
       </div>
       {row.projectedItem &&
@@ -2483,18 +2497,26 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           request={ctx.citationRequest}
           listRef={ctx.listRef}
         >
-          <ChatMarkdown
-            text={messageText}
-            cwd={ctx.markdownCwd}
-            threadRef={ctx.threadRef ?? undefined}
-            isStreaming={Boolean(row.message.streaming)}
-            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-            skills={ctx.skills}
-            headingLevelOffset={MESSAGE_HEADING_LEVEL}
-            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-            onRunShellCommand={ctx.onRunShellCommand}
-            onImageExpand={ctx.onImageExpand}
-          />
+          <ModUiSite
+            component="AssistantMessage"
+            instanceId={row.message.id}
+            props={{ text: messageText, isFirstOfReply: true }}
+          >
+            {(modProps) => (
+              <ChatMarkdown
+                text={typeof modProps.text === "string" ? modProps.text : messageText}
+                cwd={ctx.markdownCwd}
+                threadRef={ctx.threadRef ?? undefined}
+                isStreaming={Boolean(row.message.streaming)}
+                lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+                skills={ctx.skills}
+                headingLevelOffset={MESSAGE_HEADING_LEVEL}
+                onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+                onRunShellCommand={ctx.onRunShellCommand}
+                onImageExpand={ctx.onImageExpand}
+              />
+            )}
+          </ModUiSite>
         </AssistantCitationSource>
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
@@ -3669,17 +3691,48 @@ function WorkGroupToggleTimelineRow({
   row: Extract<TimelineRow, { kind: "work-toggle" }>;
 }) {
   const ctx = use(TimelineRowCtx);
+  const applied = useRef<boolean | null>(null);
+  useEffect(() => {
+    applied.current = null;
+  }, [row.expanded]);
+  const calls = row.groupedEntries.flatMap((entry) => {
+    const call = modUiToolProps(entry.projectedItem?.item);
+    return call ? [call] : [];
+  });
   return (
-    <WorkGroupHeader
-      label={row.summary}
-      iconName={row.summaryToolIcon ?? row.toolSurface ?? toolGroupSummaryIconName(row.summaryKind)}
-      toolIcon={row.toolIcon}
-      failed={row.hasFailure}
-      expanded={row.expanded}
-      createdAt={row.createdAt}
-      timestampFormat={ctx.timestampFormat}
-      onToggle={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
-    />
+    <ModUiSite
+      onRewrite={(props) => {
+        if (
+          typeof props.isExpanded === "boolean" &&
+          props.isExpanded !== row.expanded &&
+          applied.current !== props.isExpanded
+        ) {
+          applied.current = props.isExpanded;
+          ctx.onToggleWorkGroup(row.groupId, row.id);
+        }
+      }}
+      component="ToolGroup"
+      instanceId={row.groupId}
+      enabled={calls.length > 0}
+      props={{ calls, isActive: false, isExpanded: row.expanded }}
+    >
+      {() => (
+        <>
+          <WorkGroupHeader
+            label={row.summary}
+            iconName={
+              row.summaryToolIcon ?? row.toolSurface ?? toolGroupSummaryIconName(row.summaryKind)
+            }
+            toolIcon={row.toolIcon}
+            failed={row.hasFailure}
+            expanded={row.expanded}
+            createdAt={row.createdAt}
+            timestampFormat={ctx.timestampFormat}
+            onToggle={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
+          />
+        </>
+      )}
+    </ModUiSite>
   );
 }
 
@@ -5121,153 +5174,186 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     : {};
 
   return (
-    <WorkLogRow
-      data-v2-item-type={workEntry.projectedItem?.item.type}
-      data-v2-item-visibility={workEntry.projectedItem?.visibility}
-      {...rowToggleProps}
-      icon={
-        <span
-          className={iconWrapperClass}
-          role={showFailedIndicator ? "img" : undefined}
-          aria-label={showFailedIndicator ? "Tool call failed" : undefined}
-        >
-          <ToolActivityIconView
-            icon={entryToolIcon}
-            fallbackName={entryIconName}
-            className="block size-4 shrink-0 stroke-2"
-            muted
-          />
-        </span>
-      }
-      label={
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
-            <span
-              className={cn(answerPreview ? "min-w-0" : "min-w-0 flex-1", "truncate", headingClass)}
-            >
-              {isReasoning && !expanded ? (
-                <ReactMarkdown
-                  remarkPlugins={[
-                    remarkGfm,
-                    [
-                      remarkThoughtPreview,
-                      workEntry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought",
-                    ],
-                  ]}
-                >
-                  {workEntry.detail ?? previewText}
-                </ReactMarkdown>
-              ) : (
-                previewText
-              )}
-            </span>
-            {answerPreview ? (
-              <span
-                className={cn(
-                  "min-w-0 truncate",
-                  !expanded &&
-                    workEntry.questionAnswer &&
-                    hasQuestionAnswer(workEntry.questionAnswer)
-                    ? "text-foreground"
-                    : "text-muted-foreground",
-                )}
-              >
-                {answerPreview}
-              </span>
-            ) : null}
-          </p>
-        </div>
-      }
-      trailing={
-        <>
-          {createdThread ? (
-            <button
-              type="button"
-              className="shrink-0 rounded-sm text-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Open ${createdThread.title ?? "created thread"}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                ctx.onOpenThread(createdThread.targetThreadId);
-              }}
-              onKeyDown={stopRowToggle}
-            >
-              Open chat
-            </button>
-          ) : null}
-          {notifiedSubagentThreadId ? (
-            <InlineButton
-              aria-label="Open subagent thread"
-              onClick={(event) => {
-                event.stopPropagation();
-                ctx.onOpenThread(notifiedSubagentThreadId);
-              }}
-              onKeyDown={stopRowToggle}
-            >
-              Open subagent
-            </InlineButton>
-          ) : null}
-          {showFailedIndicator &&
-          !showDestructiveRowStyle &&
-          !toolIconAcceptsTint(entryIconName, entryToolIcon) ? (
-            <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
-          ) : null}
-          <TimelineRowTimestamp createdAt={workEntry.createdAt} timestampFormat={timestampFormat} />
+    <ModUiSite
+      component="ToolUse"
+      instanceId={workEntry.id}
+      props={modUiToolProps(workEntry.projectedItem?.item) ?? {}}
+      enabled={modUiToolProps(workEntry.projectedItem?.item) !== null}
+    >
+      <WorkLogRow
+        data-v2-item-type={workEntry.projectedItem?.item.type}
+        data-v2-item-visibility={workEntry.projectedItem?.visibility}
+        {...rowToggleProps}
+        icon={
           <span
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center",
-              !canExpandProjectedItem && "invisible",
-            )}
-            aria-hidden
+            className={iconWrapperClass}
+            role={showFailedIndicator ? "img" : undefined}
+            aria-label={showFailedIndicator ? "Tool call failed" : undefined}
           >
-            <ChevronRightIcon
-              className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-90",
-              )}
+            <ToolActivityIconView
+              icon={entryToolIcon}
+              fallbackName={entryIconName}
+              className="block size-4 shrink-0 stroke-2"
+              muted
             />
           </span>
-        </>
-      }
-    >
-      {expanded && viewedImage && threadRef ? (
-        <WorkLogDetails kind="media">
-          <ChatMarkdownAssetImage
-            environmentId={threadRef.environmentId}
-            resource={viewedImage.resource}
-            alt={viewedImage.alt}
-            srcFragment={viewedImage.srcFragment}
-            workspaceRoot={workspaceRoot}
-            maxHeightRem={16}
-            onImageExpand={onImageExpand}
-          />
-        </WorkLogDetails>
-      ) : null}
-      {expanded && workEntry.questionAnswer ? (
-        <QuestionAnswerHistory answer={workEntry.questionAnswer} />
-      ) : null}
-      {expanded && isReasoning ? <ReasoningTraceContent entries={[workEntry]} /> : null}
-      {expanded &&
-      !isReasoning &&
-      !workEntry.questionAnswer &&
-      canExpandProjectedItem &&
-      (expandedBody || (workEntry.projectedItem && plainOutput === undefined)) ? (
-        <WorkLogDetails kind="panel">
-          {workEntry.projectedItem && plainOutput === undefined ? (
-            <V2ItemInspector
-              projectedItem={workEntry.projectedItem}
-              environmentId={ctx.activeThreadEnvironmentId}
-              cwd={ctx.markdownCwd}
-              workspaceRoot={workspaceRoot}
-              onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
-              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+        }
+        label={
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
+              <span
+                className={cn(
+                  answerPreview ? "min-w-0" : "min-w-0 flex-1",
+                  "truncate",
+                  headingClass,
+                )}
+              >
+                {isReasoning && !expanded ? (
+                  <ReactMarkdown
+                    remarkPlugins={[
+                      remarkGfm,
+                      [
+                        remarkThoughtPreview,
+                        workEntry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought",
+                      ],
+                    ]}
+                  >
+                    {workEntry.detail ?? previewText}
+                  </ReactMarkdown>
+                ) : (
+                  previewText
+                )}
+              </span>
+              {answerPreview ? (
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    !expanded &&
+                      workEntry.questionAnswer &&
+                      hasQuestionAnswer(workEntry.questionAnswer)
+                      ? "text-foreground"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {answerPreview}
+                </span>
+              ) : null}
+            </p>
+          </div>
+        }
+        trailing={
+          <>
+            {createdThread ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-sm text-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`Open ${createdThread.title ?? "created thread"}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  ctx.onOpenThread(createdThread.targetThreadId);
+                }}
+                onKeyDown={stopRowToggle}
+              >
+                Open chat
+              </button>
+            ) : null}
+            {notifiedSubagentThreadId ? (
+              <InlineButton
+                aria-label="Open subagent thread"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  ctx.onOpenThread(notifiedSubagentThreadId);
+                }}
+                onKeyDown={stopRowToggle}
+              >
+                Open subagent
+              </InlineButton>
+            ) : null}
+            {showFailedIndicator &&
+            !showDestructiveRowStyle &&
+            !toolIconAcceptsTint(entryIconName, entryToolIcon) ? (
+              <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+            ) : null}
+            <TimelineRowTimestamp
+              createdAt={workEntry.createdAt}
+              timestampFormat={timestampFormat}
             />
-          ) : expandedBody ? (
-            <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
-          ) : null}
-        </WorkLogDetails>
-      ) : null}
-    </WorkLogRow>
+            <span
+              className={cn(
+                "flex size-4 shrink-0 items-center justify-center",
+                !canExpandProjectedItem && "invisible",
+              )}
+              aria-hidden
+            >
+              <ChevronRightIcon
+                className={cn(
+                  "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
+                  expanded && "rotate-90",
+                )}
+              />
+            </span>
+          </>
+        }
+      >
+        {expanded && viewedImage && threadRef ? (
+          <WorkLogDetails kind="media">
+            <ChatMarkdownAssetImage
+              environmentId={threadRef.environmentId}
+              resource={viewedImage.resource}
+              alt={viewedImage.alt}
+              srcFragment={viewedImage.srcFragment}
+              workspaceRoot={workspaceRoot}
+              maxHeightRem={16}
+              onImageExpand={onImageExpand}
+            />
+          </WorkLogDetails>
+        ) : null}
+        {expanded && workEntry.questionAnswer ? (
+          <QuestionAnswerHistory answer={workEntry.questionAnswer} />
+        ) : null}
+        {expanded && isReasoning ? <ReasoningTraceContent entries={[workEntry]} /> : null}
+        {expanded &&
+        !isReasoning &&
+        !workEntry.questionAnswer &&
+        canExpandProjectedItem &&
+        (expandedBody || (workEntry.projectedItem && plainOutput === undefined)) ? (
+          <ModUiSite
+            component="ToolResult"
+            instanceId={`${workEntry.id}:result`}
+            props={modUiToolProps(workEntry.projectedItem?.item) ?? {}}
+            enabled={modUiToolProps(workEntry.projectedItem?.item) !== null}
+          >
+            {(modProps) => (
+              <WorkLogDetails kind="panel">
+                {modUiResultText(
+                  modUiToolProps(workEntry.projectedItem?.item)?.output,
+                  modProps.output,
+                ) !== null ? (
+                  <pre className={toolCallExpandedBodyClassName}>
+                    {modUiResultText(
+                      modUiToolProps(workEntry.projectedItem?.item)?.output,
+                      modProps.output,
+                    )}
+                  </pre>
+                ) : workEntry.projectedItem && plainOutput === undefined ? (
+                  <V2ItemInspector
+                    projectedItem={workEntry.projectedItem}
+                    environmentId={ctx.activeThreadEnvironmentId}
+                    cwd={ctx.markdownCwd}
+                    workspaceRoot={workspaceRoot}
+                    onOpenThread={ctx.onOpenThread}
+                    onOpenTurnDiff={ctx.onOpenTurnDiff}
+                    onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+                  />
+                ) : expandedBody ? (
+                  <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
+                ) : null}
+              </WorkLogDetails>
+            )}
+          </ModUiSite>
+        ) : null}
+      </WorkLogRow>
+    </ModUiSite>
   );
 });
 

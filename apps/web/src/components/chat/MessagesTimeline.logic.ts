@@ -517,6 +517,7 @@ type MessagesTimelineRowContent =
       runId?: RunId | null;
       groupId: string;
       hiddenCount: number;
+      groupedEntries: WorkLogEntry[];
       expanded: boolean;
       summary: string;
       summaryKind: ToolGroupSummaryKind;
@@ -1568,6 +1569,7 @@ export function deriveMessagesTimelineRows(input: {
             runId: timelineEntry.entry.runId ?? null,
             groupId,
             hiddenCount: visibleGroupedEntries.length,
+            groupedEntries: visibleGroupedEntries,
             expanded,
             summary: usesSingleToolCallLabel
               ? singleToolCallLabel(singleEntry)
@@ -2021,6 +2023,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.runId === bw.runId &&
         a.groupId === bw.groupId &&
         a.hiddenCount === bw.hiddenCount &&
+        Equal.equals(a.groupedEntries, bw.groupedEntries) &&
         a.expanded === bw.expanded &&
         a.summary === bw.summary &&
         a.summaryKind === bw.summaryKind &&

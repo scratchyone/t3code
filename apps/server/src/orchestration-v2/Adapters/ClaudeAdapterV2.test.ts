@@ -153,6 +153,26 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it("preserves plugins enabled by inline launch settings alongside model settings", () => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "mod-settings-thread",
+      resume: false,
+      cwd: "/workspace",
+      sdkSettings: { permissions: { allow: ["Read"] } },
+      settings: {
+        ...DEFAULT_CLAUDE_SETTINGS,
+        launchArgs: `--settings '{"enabledPlugins":{"example@builtin":true}}'`,
+      },
+    });
+    assert.include(options.settings, { showThinkingSummaries: true });
+    assert.deepInclude(options.settings, {
+      enabledPlugins: { "example@builtin": true },
+      permissions: { allow: ["Read"] },
+    });
+    assert.isUndefined(options.extraArgs?.settings);
+  });
+
   it.each([false, true])("requests thinking summaries with resume=%s", (resume) => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,

@@ -1,3 +1,5 @@
+import { modUiQuestions } from "@t3tools/client-runtime/mod-ui";
+import { ModUiSite } from "../mods/ModUiSite";
 import { type RuntimeRequestId } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { type PendingUserInput } from "../../session-logic";
@@ -34,16 +36,35 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   if (!activePrompt) return null;
 
   return (
-    <ComposerPendingUserInputCard
-      key={activePrompt.requestId}
-      prompt={activePrompt}
-      isResponding={respondingRequestIds.includes(activePrompt.requestId)}
-      answers={answers}
-      questionIndex={questionIndex}
-      onToggleOption={onToggleOption}
-      onAdvance={onAdvance}
-      onDismiss={onDismiss}
-    />
+    <ModUiSite
+      component="AskUserQuestion"
+      instanceId={activePrompt.requestId}
+      props={{
+        tool: "AskUserQuestion",
+        questions: activePrompt.questions.map(({ header, question, options, multiSelect }) => ({
+          header,
+          question,
+          options: options.map(({ label, description }) => ({ label, description })),
+          multiSelect,
+        })),
+      }}
+    >
+      {(modProps) => (
+        <ComposerPendingUserInputCard
+          key={activePrompt.requestId}
+          prompt={{
+            ...activePrompt,
+            questions: modUiQuestions(activePrompt.questions, modProps.questions),
+          }}
+          isResponding={respondingRequestIds.includes(activePrompt.requestId)}
+          answers={answers}
+          questionIndex={questionIndex}
+          onToggleOption={onToggleOption}
+          onAdvance={onAdvance}
+          onDismiss={onDismiss}
+        />
+      )}
+    </ModUiSite>
   );
 });
 

@@ -1,3 +1,5 @@
+import { modUiToolProps, modUiResultText } from "@t3tools/client-runtime/mod-ui";
+import { ModUiSite } from "./ModUiSite";
 import { SubagentStatusDot } from "./SubagentStatusDot";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
 import {
@@ -882,164 +884,187 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
   const icon = reasoning ? "brain" : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
 
   return (
-    <Animated.View
-      layout={WORK_LOG_LAYOUT_TRANSITION}
-      className="overflow-hidden"
-      {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
+    <ModUiSite
+      component="ToolUse"
+      instanceId={row.id}
+      props={modUiToolProps(row.projectedItem.item) ?? {}}
+      enabled={modUiToolProps(row.projectedItem.item) !== null}
     >
-      <WorkLogPressable
-        accessibilityRole={
-          notifiedSubagentThreadId !== undefined ? "link" : canExpand ? "button" : undefined
-        }
-        accessibilityLabel={failed ? `${accessiblePreview}, tool call failed` : accessiblePreview}
-        accessibilityHint={
-          notifiedSubagentThreadId !== undefined
-            ? "Opens this agent's thread. Long press to copy."
-            : canExpand
-              ? `Double tap to ${expanded ? "hide" : "show"} full details. Long press to copy.`
-              : "Long press to copy."
-        }
-        accessibilityState={canExpand ? { expanded } : undefined}
-        onPress={() => {
-          if (notifiedSubagentThreadId !== undefined) {
-            navigation.navigate("Thread", {
-              environmentId: String(props.environmentId),
-              threadId: String(notifiedSubagentThreadId),
-            });
-            return;
-          }
-          if (canExpand) {
-            void Haptics.selectionAsync();
-            props.onToggleRow(row.id, props.anchorKey);
-          }
-        }}
-        onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}
+      <Animated.View
+        layout={WORK_LOG_LAYOUT_TRANSITION}
+        className="overflow-hidden"
+        {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
       >
-        {row.live && !expanded ? (
-          <ShimmeringWorkContent
-            environmentId={props.environmentId}
-            icon={icon}
-            iconSubtleColor={props.iconSubtleColor}
-            label={displayText}
-            showIcon
-            themeAppearance={props.themeAppearance}
-            toolIcon={toolIcon}
-          />
-        ) : (
-          <>
-            <WorkLogIconSlot>
-              {toolIcon ? (
-                <ToolActivityIconView
-                  environmentId={props.environmentId}
-                  icon={toolIcon}
-                  fallback={icon}
-                  fallbackColor={props.iconSubtleColor}
-                  themeAppearance={props.themeAppearance}
-                />
-              ) : (
-                <WorkLogIcon
-                  icon={icon}
-                  color={props.iconSubtleColor}
-                  colorClassName={
-                    isUsageLimit
-                      ? "accent-warning-foreground"
-                      : iconIsDestructive
-                        ? "accent-adaptive-rose-600-400"
-                        : failed
-                          ? "accent-danger-foreground/40"
-                          : undefined
-                  }
-                />
-              )}
-            </WorkLogIconSlot>
-            <WorkLogLabel
-              tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
-            >
-              {isSystemNotice ? row.summary : displayText}
-              {answerPreview ? (
-                <Text
-                  className={
-                    !expanded &&
-                    row.workEntry.questionAnswer &&
-                    hasQuestionAnswer(row.workEntry.questionAnswer)
-                      ? "text-foreground"
-                      : "text-foreground-subtle"
-                  }
-                >{`  ${answerPreview}`}</Text>
-              ) : null}
-            </WorkLogLabel>
-          </>
-        )}
+        <WorkLogPressable
+          accessibilityRole={
+            notifiedSubagentThreadId !== undefined ? "link" : canExpand ? "button" : undefined
+          }
+          accessibilityLabel={failed ? `${accessiblePreview}, tool call failed` : accessiblePreview}
+          accessibilityHint={
+            notifiedSubagentThreadId !== undefined
+              ? "Opens this agent's thread. Long press to copy."
+              : canExpand
+                ? `Double tap to ${expanded ? "hide" : "show"} full details. Long press to copy.`
+                : "Long press to copy."
+          }
+          accessibilityState={canExpand ? { expanded } : undefined}
+          onPress={() => {
+            if (notifiedSubagentThreadId !== undefined) {
+              navigation.navigate("Thread", {
+                environmentId: String(props.environmentId),
+                threadId: String(notifiedSubagentThreadId),
+              });
+              return;
+            }
+            if (canExpand) {
+              void Haptics.selectionAsync();
+              props.onToggleRow(row.id, props.anchorKey);
+            }
+          }}
+          onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}
+        >
+          {row.live && !expanded ? (
+            <ShimmeringWorkContent
+              environmentId={props.environmentId}
+              icon={icon}
+              iconSubtleColor={props.iconSubtleColor}
+              label={displayText}
+              showIcon
+              themeAppearance={props.themeAppearance}
+              toolIcon={toolIcon}
+            />
+          ) : (
+            <>
+              <WorkLogIconSlot>
+                {toolIcon ? (
+                  <ToolActivityIconView
+                    environmentId={props.environmentId}
+                    icon={toolIcon}
+                    fallback={icon}
+                    fallbackColor={props.iconSubtleColor}
+                    themeAppearance={props.themeAppearance}
+                  />
+                ) : (
+                  <WorkLogIcon
+                    icon={icon}
+                    color={props.iconSubtleColor}
+                    colorClassName={
+                      isUsageLimit
+                        ? "accent-warning-foreground"
+                        : iconIsDestructive
+                          ? "accent-adaptive-rose-600-400"
+                          : failed
+                            ? "accent-danger-foreground/40"
+                            : undefined
+                    }
+                  />
+                )}
+              </WorkLogIconSlot>
+              <WorkLogLabel
+                tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
+              >
+                {isSystemNotice ? row.summary : displayText}
+                {answerPreview ? (
+                  <Text
+                    className={
+                      !expanded &&
+                      row.workEntry.questionAnswer &&
+                      hasQuestionAnswer(row.workEntry.questionAnswer)
+                        ? "text-foreground"
+                        : "text-foreground-subtle"
+                    }
+                  >{`  ${answerPreview}`}</Text>
+                ) : null}
+              </WorkLogLabel>
+            </>
+          )}
 
-        <View className="shrink-0 flex-row items-center gap-px">
-          {props.copied ? (
-            <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
-              Copied
-            </Text>
-          ) : null}
-          {failed && toolIcon !== undefined ? (
-            <View
-              className="h-4 w-4 items-center justify-center"
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              <SymbolView
-                name="xmark"
-                size={11}
-                tintColorClassName="accent-danger-foreground/40"
-                type="monochrome"
-              />
+          <View className="shrink-0 flex-row items-center gap-px">
+            {props.copied ? (
+              <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
+                Copied
+              </Text>
+            ) : null}
+            {failed && toolIcon !== undefined ? (
+              <View
+                className="h-4 w-4 items-center justify-center"
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              >
+                <SymbolView
+                  name="xmark"
+                  size={11}
+                  tintColorClassName="accent-danger-foreground/40"
+                  type="monochrome"
+                />
+              </View>
+            ) : null}
+            <View className="h-4 w-4 items-center justify-center">
+              {canExpand ? (
+                <ThreadDisclosureChevron
+                  expanded={expanded}
+                  collapsedDirection="down"
+                  size={11}
+                  tintColor={props.iconSubtleColor}
+                />
+              ) : null}
             </View>
-          ) : null}
-          <View className="h-4 w-4 items-center justify-center">
-            {canExpand ? (
-              <ThreadDisclosureChevron
-                expanded={expanded}
-                collapsedDirection="down"
-                size={11}
-                tintColor={props.iconSubtleColor}
+          </View>
+        </WorkLogPressable>
+
+        {expanded &&
+        (reasoning || fullDetail || viewedImagePath || row.workEntry.questionAnswer) ? (
+          <Animated.View
+            entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
+            exiting={WORK_LOG_DETAIL_EXIT_TRANSITION}
+            layout={WORK_LOG_LAYOUT_TRANSITION}
+            className={reasoning ? "ml-7 py-1" : "ml-7 border-l border-border pb-1 pl-3 pt-0.5"}
+          >
+            {row.workEntry.questionAnswer ? (
+              <QuestionAnswerHistory
+                environmentId={props.environmentId}
+                answer={row.workEntry.questionAnswer}
               />
             ) : null}
-          </View>
-        </View>
-      </WorkLogPressable>
-
-      {expanded && (reasoning || fullDetail || viewedImagePath || row.workEntry.questionAnswer) ? (
-        <Animated.View
-          entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
-          exiting={WORK_LOG_DETAIL_EXIT_TRANSITION}
-          layout={WORK_LOG_LAYOUT_TRANSITION}
-          className={reasoning ? "ml-7 py-1" : "ml-7 border-l border-border pb-1 pl-3 pt-0.5"}
-        >
-          {row.workEntry.questionAnswer ? (
-            <QuestionAnswerHistory
-              environmentId={props.environmentId}
-              answer={row.workEntry.questionAnswer}
-            />
-          ) : null}
-          {viewedImagePath ? (
-            <View className="pb-1.5">
-              {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
-            </View>
-          ) : null}
-          <ScrollView
-            nestedScrollEnabled
-            directionalLockEnabled
-            showsVerticalScrollIndicator
-            className="max-h-60"
-            contentContainerStyle={{ paddingRight: 8 }}
-          >
-            {reasoning ? (
-              props.renderReasoning(reasoning.text)
-            ) : (
-              <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
-                {fullDetail}
-              </Text>
-            )}
-          </ScrollView>
-        </Animated.View>
-      ) : null}
-    </Animated.View>
+            {viewedImagePath ? (
+              <View className="pb-1.5">
+                {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
+              </View>
+            ) : null}
+            <ModUiSite
+              component="ToolResult"
+              instanceId={`${row.id}:result`}
+              props={modUiToolProps(row.projectedItem.item) ?? {}}
+              enabled={modUiToolProps(row.projectedItem.item) !== null}
+            >
+              {(modProps) => (
+                <ScrollView
+                  nestedScrollEnabled
+                  directionalLockEnabled
+                  showsVerticalScrollIndicator
+                  className="max-h-60"
+                  contentContainerStyle={{ paddingRight: 8 }}
+                >
+                  {reasoning ? (
+                    props.renderReasoning(reasoning.text)
+                  ) : (
+                    <Text
+                      selectable
+                      className="font-mono text-2xs leading-normal text-foreground-muted"
+                    >
+                      {modUiResultText(
+                        modUiToolProps(row.projectedItem.item)?.output,
+                        modProps.output,
+                      ) ?? fullDetail}
+                    </Text>
+                  )}
+                </ScrollView>
+              )}
+            </ModUiSite>
+          </Animated.View>
+        ) : null}
+      </Animated.View>
+    </ModUiSite>
   );
 });
 
