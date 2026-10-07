@@ -362,6 +362,18 @@
     "./device/duo-control": {
       "types": "./src/device/duoControl.ts",
       "default": "./src/device/duoControl.ts"
+    },
+    "./mod-ui": {
+      "types": "./src/modUi/controller.ts",
+      "default": "./src/modUi/controller.ts"
+    },
+    "./state/modUi": {
+      "types": "./src/state/modUi.ts",
+      "default": "./src/state/modUi.ts"
+    },
+    "./mod-ui/composer": {
+      "types": "./src/modUi/composer.ts",
+      "default": "./src/modUi/composer.ts"
     }
   },
   "scripts": {

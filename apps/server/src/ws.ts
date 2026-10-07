@@ -1,3 +1,4 @@
+import * as ModUi from "./provider/ModUi.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -1105,6 +1106,7 @@ const makeWsRpcLayer = (
       const threadSearch = yield* ThreadSearch.ThreadSearch;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const modUi = yield* ModUi.make;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Client-origin attribution (#7774): every thread/turn the connecting
       // client starts is credited to its surface + app version. Best-effort:
@@ -2270,6 +2272,11 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.providerModUiRequest]: (input) =>
+          observeRpcEffect(WS_METHODS.providerModUiRequest, modUi.request(input), {
+            "rpc.aggregate": "provider",
+          }),
+        [WS_METHODS.providerModUiSubscribe]: (input) => modUi.subscribe(input),
         [WS_METHODS.providerUploadFeedback]: (input) =>
           observeRpcEffect(
             WS_METHODS.providerUploadFeedback,

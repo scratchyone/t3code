@@ -1,3 +1,5 @@
+import { modUiToolProps } from "@t3tools/client-runtime/mod-ui";
+import { ModUiSite } from "./ModUiSite";
 import { ThreadContextDivider } from "./thread-context-divider";
 import { ThreadHandoffRow } from "./thread-handoff-row";
 import {
@@ -1559,23 +1561,42 @@ function renderFeedEntry(
   }
 
   if (entry.type === "work-toggle") {
+    const calls = entry.activities.flatMap((activity) => {
+      const call = modUiToolProps(activity.projectedItem.item);
+      return call ? [call] : [];
+    });
     return (
-      <ThreadWorkGroupToggle
-        environmentId={props.environmentId}
-        rowSizing={props.workRowSizing}
-        expanded={entry.expanded}
-        hiddenCount={entry.hiddenCount}
-        iconSubtleColor={iconSubtleColor}
-        summary={entry.summary}
-        summaryKind={entry.summaryKind}
-        themeAppearance={props.themeAppearance}
-        toolSurface={entry.toolSurface}
-        toolIcon={entry.toolIcon}
-        summaryToolIcon={entry.summaryToolIcon}
-        hasFailure={entry.hasFailure}
-        shimmer={entry.shimmer}
-        onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
-      />
+      <ModUiSite
+        onRewrite={(modProps) => {
+          if (typeof modProps.isExpanded === "boolean" && modProps.isExpanded !== entry.expanded)
+            props.onToggleWorkGroup(entry.groupId, entry.id);
+        }}
+        component="ToolGroup"
+        instanceId={entry.groupId}
+        enabled={calls.length > 0}
+        props={{ calls, isActive: entry.live, isExpanded: entry.expanded }}
+      >
+        {() => (
+          <>
+            <ThreadWorkGroupToggle
+              environmentId={props.environmentId}
+              rowSizing={props.workRowSizing}
+              expanded={entry.expanded}
+              hiddenCount={entry.hiddenCount}
+              iconSubtleColor={iconSubtleColor}
+              summary={entry.summary}
+              summaryKind={entry.summaryKind}
+              themeAppearance={props.themeAppearance}
+              toolSurface={entry.toolSurface}
+              toolIcon={entry.toolIcon}
+              summaryToolIcon={entry.summaryToolIcon}
+              hasFailure={entry.hasFailure}
+              shimmer={entry.shimmer}
+              onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
+            />
+          </>
+        )}
+      </ModUiSite>
     );
   }
 
@@ -1731,16 +1752,24 @@ function renderFeedEntry(
               <MarkdownImageAvailableWidthContext
                 value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
               >
-                <UserMessageContent
-                  text={renderedText}
-                  environmentId={props.environmentId}
-                  context={message.context}
-                  markdownStyles={styles}
-                  reviewCommentColors={props.reviewCommentColors}
-                  skills={props.skills}
-                  linkHandlers={props.markdownLinkHandlers}
-                  renderImage={props.renderMarkdownImage}
-                />
+                <ModUiSite
+                  component="UserMessage"
+                  instanceId={message.id}
+                  props={{ text: renderedText, origin: { kind: "unclassified" }, isExpanded: true }}
+                >
+                  {(modProps) => (
+                    <UserMessageContent
+                      text={typeof modProps.text === "string" ? modProps.text : renderedText}
+                      environmentId={props.environmentId}
+                      context={message.context}
+                      markdownStyles={styles}
+                      reviewCommentColors={props.reviewCommentColors}
+                      skills={props.skills}
+                      linkHandlers={props.markdownLinkHandlers}
+                      renderImage={props.renderMarkdownImage}
+                    />
+                  )}
+                </ModUiSite>
               </MarkdownImageAvailableWidthContext>
             ) : null}
           </View>
@@ -1838,14 +1867,22 @@ function renderFeedEntry(
       >
         {renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
-            <AssistantMarkdownContent
-              markdown={renderedText}
-              markdownStyles={styles}
-              linkHandlers={props.markdownLinkHandlers}
-              onUseArtifactTemplate={props.onUseArtifactTemplate}
-              renderImage={props.renderMarkdownImage}
-              skills={props.skills}
-            />
+            <ModUiSite
+              component="AssistantMessage"
+              instanceId={message.id}
+              props={{ text: renderedText, isFirstOfReply: true }}
+            >
+              {(modProps) => (
+                <AssistantMarkdownContent
+                  markdown={typeof modProps.text === "string" ? modProps.text : renderedText}
+                  markdownStyles={styles}
+                  linkHandlers={props.markdownLinkHandlers}
+                  onUseArtifactTemplate={props.onUseArtifactTemplate}
+                  renderImage={props.renderMarkdownImage}
+                  skills={props.skills}
+                />
+              )}
+            </ModUiSite>
           </MarkdownImageAvailableWidthContext>
         ) : null}
         {attachments.map((attachment) => {

@@ -1,3 +1,6 @@
+import { createClaudeModUi } from "./ClaudeModUi.ts";
+import type { ProviderModUiRequest, ProviderModUiEvent } from "@t3tools/contracts";
+import * as PubSub from "effect/PubSub";
 import * as NodeCrypto from "node:crypto";
 
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -324,6 +327,12 @@ export interface ClaudeAgentSdkQueryOpenInput {
 }
 
 export interface ClaudeAgentSdkQuerySession {
+  readonly modUi?: {
+    readonly request: (
+      input: ProviderModUiRequest,
+    ) => Effect.Effect<unknown, ClaudeAgentSdkQueryRunnerError>;
+    readonly events: Stream.Stream<ProviderModUiEvent>;
+  };
   readonly messages: Stream.Stream<SDKMessage, ClaudeAgentSdkQueryRunnerError>;
   readonly offer: (message: SDKUserMessage) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly setModel: (model: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
@@ -619,6 +628,10 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
             }),
           catch: (cause) => queryRunnerError(cause, "query"),
         });
+        const uiEvents = yield* PubSub.unbounded<ProviderModUiEvent>();
+        const modUi = createClaudeModUi(queryRuntime, (event) => {
+          void Effect.runPromise(PubSub.publish(uiEvents, event)).catch(() => {});
+        });
         yield* logProtocolEvent({
           direction: "outgoing",
           stage: "decoded",
@@ -629,9 +642,18 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
         });
 
         return {
+          modUi: {
+            request: (request) =>
+              Effect.tryPromise({
+                try: () => modUi.request(request),
+                catch: (cause) => queryRunnerError(cause, "modUi"),
+              }),
+            events: Stream.fromPubSub(uiEvents),
+          },
           messages: Stream.fromAsyncIterable(claudeQueryMessages(queryRuntime), (cause) =>
             queryRunnerError(cause, "fromAsyncIterable"),
           ).pipe(
+            Stream.tap((message) => Effect.sync(() => modUi.receive(message))),
             Stream.tap((message) =>
               logProtocolEvent({
                 direction: "incoming",
@@ -639,6 +661,7 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
                 payload: message,
               }),
             ),
+            Stream.ensuring(PubSub.shutdown(uiEvents)),
           ),
           offer: (message) =>
             Queue.offer(promptQueue, message).pipe(
@@ -685,6 +708,8 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
             ),
           ),
           close: Queue.shutdown(promptQueue).pipe(
+            Effect.tap(() => Effect.sync(() => modUi.close())),
+            Effect.andThen(PubSub.shutdown(uiEvents)),
             Effect.andThen(closeClaudeQuery(queryRuntime)),
             Effect.tap(() =>
               logProtocolEvent({
@@ -815,15 +840,32 @@ export function makeClaudeQueryOptions(input: {
     ? { resume: input.nativeThreadId }
     : { sessionId: input.nativeThreadId };
   const selectedTools = input.tools ?? CLAUDE_CODE_PRESET_TOOLS;
+  // The SDK replaces extraArgs.settings when options.settings is present.
+  // Merge inline launch settings first so model settings do not drop plugins.
+  const launchSettingsText = extraArgs.settings;
+  const launchSettings: unknown =
+    typeof launchSettingsText === "string" && launchSettingsText.trimStart().startsWith("{")
+      ? JSON.parse(launchSettingsText)
+      : undefined;
+  const sdkSettings =
+    typeof launchSettings === "object" && launchSettings !== null && !Array.isArray(launchSettings)
+      ? ({
+          ...(typeof input.sdkSettings === "object" && input.sdkSettings !== null
+            ? input.sdkSettings
+            : {}),
+          ...launchSettings,
+        } as ClaudeSdkSettings)
+      : input.sdkSettings;
+  if (launchSettings !== undefined) delete extraArgs.settings;
   const selectionSettings =
     Object.keys(compiledSelection.settings).length === 0
       ? undefined
       : (compiledSelection.settings as ClaudeSdkSettings);
   const querySettings =
     selectionSettings === undefined
-      ? input.sdkSettings
-      : typeof input.sdkSettings === "object" && input.sdkSettings !== null
-        ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
+      ? sdkSettings
+      : typeof sdkSettings === "object" && sdkSettings !== null
+        ? ({ ...sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
   const effectiveQuerySettings =
     input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
@@ -2954,6 +2996,10 @@ export function makeClaudeAdapterV2(
         const interruptedTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
+        const modUiEvents = yield* PubSub.unbounded<
+          ProviderModUiEvent & { nativeThreadId: string }
+        >();
+        yield* Effect.addFinalizer(() => PubSub.shutdown(modUiEvents));
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         const planIdsByNativeItem = yield* Ref.make(
@@ -6966,6 +7012,19 @@ export function makeClaudeAdapterV2(
             ),
           };
           yield* Ref.set(queryContext, context);
+          if (querySession.modUi) {
+            yield* querySession.modUi.events.pipe(
+              Stream.runForEach((event) =>
+                PubSub.publish(modUiEvents, { ...event, nativeThreadId }),
+              ),
+              Effect.forkIn(sessionScope),
+            );
+            yield* PubSub.publish(modUiEvents, {
+              subtype: "session_ready",
+              payload: { reset: true },
+              nativeThreadId,
+            });
+          }
           yield* querySession.messages.pipe(
             Stream.runForEach((message) => handleSdkMessage({ query: querySession, message })),
             Effect.exit,
@@ -6986,6 +7045,11 @@ export function makeClaudeAdapterV2(
                   current?.query === querySession ? [true, null] : [false, current],
                 );
                 if (ownsLiveQuery) {
+                  yield* PubSub.publish(modUiEvents, {
+                    subtype: "session_unavailable",
+                    payload: {},
+                    nativeThreadId,
+                  });
                   yield* finalizeActiveTurnAfterQueryExit(
                     exit._tag === "Failure" ? exit.cause : undefined,
                   );
@@ -7361,6 +7425,38 @@ export function makeClaudeAdapterV2(
           getModelContextWindow: (selection) =>
             resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, selection),
           events: Stream.fromEffectRepeat(Queue.take(events)),
+          modUi: {
+            request: (providerThread, request) =>
+              Effect.gen(function* () {
+                const live = yield* Ref.get(queryContext);
+                if (
+                  !live?.query.modUi ||
+                  live.nativeThreadId !== providerThread.nativeThreadRef?.nativeId
+                ) {
+                  if (request.operation === "capabilities") return { supported: false };
+                  return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver: CLAUDE_PROVIDER,
+                    detail: "The Claude mod session is no longer active",
+                  });
+                }
+                return yield* live.query.modUi.request(request).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderAdapter.ProviderAdapterProtocolError({
+                        driver: CLAUDE_PROVIDER,
+                        detail: "Claude mod UI request failed",
+                        cause,
+                      }),
+                  ),
+                );
+              }),
+            events: (providerThread) =>
+              Stream.fromPubSub(modUiEvents).pipe(
+                Stream.filter(
+                  (event) => event.nativeThreadId === providerThread.nativeThreadRef?.nativeId,
+                ),
+              ),
+          },
           hasPendingBackgroundWork: Effect.gen(function* () {
             // Session capability: any native thread with pending work pins idle.
             for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {

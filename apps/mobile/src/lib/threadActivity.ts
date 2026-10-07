@@ -169,6 +169,7 @@ type ThreadFeedEntryContent =
       readonly runId: RunId | null;
       readonly groupId: string;
       readonly hiddenCount: number;
+      readonly activities: ReadonlyArray<ThreadFeedActivity>;
       readonly expanded: boolean;
       readonly summary: string;
       readonly summaryKind: ToolGroupSummaryKind;
@@ -1472,6 +1473,7 @@ function appendToolGroupRows(
     runId: sourceGroup.runId,
     groupId,
     hiddenCount: activities.length,
+    activities,
     expanded,
     summary,
     summaryKind: toolGroupSummaryKind(

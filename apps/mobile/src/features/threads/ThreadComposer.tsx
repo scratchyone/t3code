@@ -1,3 +1,5 @@
+import { ModUiContext } from "./context";
+import { record } from "@t3tools/client-runtime/mod-ui";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -26,6 +28,7 @@ import type { ReactNode } from "react";
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -178,6 +181,7 @@ export interface ThreadComposerProps {
   readonly canSteerActiveTurn: boolean;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (value: string) => void;
+  readonly onEditorSelectionChange?: (selection: { start: number; end: number }) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
@@ -503,6 +507,38 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
   });
+  const modUi = useContext(ModUiContext);
+  const promptRevision = useRef(0);
+  const handleEditorChange = (value: string) => {
+    props.onChangeDraftMessage(value);
+    const revision = ++promptRevision.current;
+    if (!modUi?.state.supported) return;
+    void modUi.controller
+      ?.send("ui_prompt_edit", {
+        text: value,
+        cursor: Math.max(
+          0,
+          Math.min(
+            value.length,
+            composerMenu.selection.end + value.length - props.draftMessage.length,
+          ),
+        ),
+        by: "person",
+      })
+      .then((reply) => {
+        const response = record(reply);
+        if (
+          revision !== promptRevision.current ||
+          response.superseded === true ||
+          typeof response.text !== "string"
+        )
+          return;
+        if (response.text !== value) props.onChangeDraftMessage(response.text);
+        if (typeof response.cursor === "number")
+          inputRef.current?.setSelection({ start: response.cursor, end: response.cursor });
+      })
+      .catch(() => {});
+  };
   const voiceInput = useVoiceInputController({
     ownerKey: composerOwnerKey,
     draftMessage: props.draftMessage,
@@ -902,8 +938,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 readOnly={voiceInput.freezesEditor}
                 skills={composerMenu.skills}
                 selection={composerMenu.selection}
-                onChangeText={props.onChangeDraftMessage}
-                onSelectionChange={composerMenu.onSelectionChange}
+                onChangeText={handleEditorChange}
+                onSelectionChange={(selection) => {
+                  composerMenu.onSelectionChange(selection);
+                  props.onEditorSelectionChange?.(selection);
+                }}
                 onPasteImages={(uris) => void props.onNativePasteImages(uris)}
                 onPasteText={(paste) => {
                   const insertPaste = () => {

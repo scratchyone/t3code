@@ -1,3 +1,9 @@
+import {
+  ProviderModUiRequest,
+  ProviderModUiSubscribe,
+  ProviderModUiEvent,
+  ProviderModUiError,
+} from "./providerModUi.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   ChatGptReconnectProfileInput,
@@ -362,6 +368,8 @@ export const WS_METHODS = {
   attachmentsDelete: "attachments.delete",
 
   // Provider methods
+  providerModUiRequest: "provider.modUi.request",
+  providerModUiSubscribe: "provider.modUi.subscribe",
   providerUploadFeedback: "provider.uploadFeedback",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
@@ -1222,6 +1230,18 @@ const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsProviderModUiRequestRpc = Rpc.make(WS_METHODS.providerModUiRequest, {
+  payload: ProviderModUiRequest,
+  success: Schema.Unknown,
+  error: Schema.Union([ProviderModUiError, EnvironmentAuthorizationError]),
+});
+const WsProviderModUiSubscribeRpc = Rpc.make(WS_METHODS.providerModUiSubscribe, {
+  payload: ProviderModUiSubscribe,
+  success: ProviderModUiEvent,
+  error: Schema.Union([ProviderModUiError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
   payload: ProviderUploadFeedbackInput,
   success: ProviderUploadFeedbackResult,
@@ -1793,6 +1813,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
+  WsProviderModUiRequestRpc,
+  WsProviderModUiSubscribeRpc,
   WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,
   WsSubscribeWorktreeSetupRpc,
